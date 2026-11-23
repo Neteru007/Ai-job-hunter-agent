@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from bot import fetch_remotive, eligible, score, MIN_NET
 
 load_dotenv()
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 USER_ID = int(os.environ.get("TELEGRAM_ALLOWED_USER_ID", "0"))
 STATE_PATH = Path("state/jobs.json")
 BASE = f"https://api.telegram.org/bot{TOKEN}"
@@ -25,10 +25,10 @@ logging.basicConfig(level=logging.INFO)
 
 def read_state():
     if not STATE_PATH.exists():
-        return {"seen": {}, "decisions": {}, "offset": 0}
+        return {"seen": {}, "decisions": {}, "offset": 0, "bootstrapped": False}
     state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
     return {"seen": state.get("seen", {}), "decisions": state.get("decisions", {}),
-            "offset": int(state.get("offset", 0))}
+            "offset": int(state.get("offset", 0)), "bootstrapped": bool(state.get("bootstrapped", False))}
 
 
 def save_state(state):
@@ -129,13 +129,12 @@ async def run():
         raise SystemExit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USER_ID as Actions secrets.")
     state = read_state()
     async with httpx.AsyncClient(timeout=35) as client:
-        # Send a visible startup confirmation before searching for jobs.
-        # Telegram requires the user to have opened the bot and pressed Start first.
-        await send(client, "🤖 AI Job Hunter запущено! Перевіряю команди та шукаю вакансії ServiceNow. Це тестове повідомлення, а не знайдена вакансія.")
-        # Telegram's getUpdates is incompatible with an active webhook.
-        webhook = await api(client, "getWebhookInfo", {})
-        if webhook.get("url"):
-            raise RuntimeError("Remove the existing Telegram webhook before using scheduled polling.")
+        # Announce only once, and persist immediately so failed searches do not resend it.
+        if not state["bootstrapped"]:
+            await send(client, "🤖 AI Job Hunter підключено! Перевіряю команди та шукаю вакансії ServiceNow. Це тестове повідомлення.")
+            state["bootstrapped"] = True
+            save_state(state)
+        # getUpdates returns 409 if a webhook is active; avoid the extra getWebhookInfo call.
         await handle_updates(client, state)
         try:
             jobs = await fetch_remotive()
