@@ -1,0 +1,57 @@
+name: Test Telegram Connection
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  telegram-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_ALLOWED_USER_ID: ${{ secrets.TELEGRAM_ALLOWED_USER_ID }}
+    steps:
+      - name: Send test message
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+          chat_id = os.environ.get("TELEGRAM_ALLOWED_USER_ID", "")
+          if not token or not chat_id:
+              raise SystemExit("Missing Telegram secrets")
+          payload = json.dumps({
+              "chat_id": chat_id,
+              "text": "🤖 AI Job Hunter: тестове повідомлення. Зв'язок із Telegram працює!"
+          }).encode()
+          request = urllib.request.Request(
+              "https://api.telegram.org/bot" + token + "/sendMessage",
+              data=payload,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  result = json.load(response)
+                  print("Telegram sendMessage success:", bool(result.get("ok")))
+          except urllib.error.HTTPError as exc:
+              # Never print the request URL because it contains the bot token.
+              print("Telegram HTTP status:", exc.code)
+              try:
+                  error = json.loads(exc.read())
+                  print("Telegram error:", error.get("description", "unknown"))
+                  print("Retry after:", error.get("parameters", {}).get("retry_after", "not specified"))
+              except (ValueError, UnicodeDecodeError):
+                  print("Telegram returned an unreadable error body")
+              raise SystemExit(1)
+          except Exception as exc:
+              print("Telegram connection error:", type(exc).__name__)
+              raise SystemExit(1)
+          PY
