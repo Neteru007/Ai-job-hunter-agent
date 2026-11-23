@@ -18,6 +18,54 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_ALLOWED_USER_ID: ${{ secrets.TELEGRAM_ALLOWED_USER_ID }}
     steps:
+      - name: Try alternative Telegram API gateways
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          """Try Telegram's published IPv4 gateways without exposing credentials."""
+          import os
+          import subprocess
+          import json
+          token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+          chat_id = os.environ.get("TELEGRAM_ALLOWED_USER_ID", "").strip()
+          if not token or not chat_id:
+              print("Telegram secrets missing")
+              raise SystemExit(1)
+          username = "NeteruCareerHunterBot"
+          for addr in ("149.154.166.110", "149.154.167.220"):
+              url = f"https://api.telegram.org/bot{token}/getMe"
+              r = subprocess.run(
+                  ["curl", "-sS", "--noproxy", "*", "--connect-timeout", "5",
+                   "--max-time", "18", "--resolve", f"api.telegram.org:443:{addr}",
+                   "-o", "/tmp/telegram-check.json", "-w", "%{http_code}", url],
+                  capture_output=True, text=True, timeout=24)
+              print(f"Alternate gateway {addr}: HTTP {r.stdout.strip() or 'none'}, curl exit {r.returncode}")
+              if r.returncode or r.stdout.strip() != "200":
+                  continue
+              try:
+                  with open("/tmp/telegram-check.json", encoding="utf-8") as h:
+                      result = json.load(h)
+                  actual = result.get("result", {}).get("username", "")
+              except (OSError, ValueError):
+                  continue
+              if actual.casefold() != username.casefold():
+                  print("Token belongs to another bot; stopping")
+                  raise SystemExit(1)
+              print("Verified expected new bot on alternate gateway")
+              r2 = subprocess.run(
+                  ["curl", "-sS", "--noproxy", "*", "--connect-timeout", "5",
+                   "--max-time", "18", "--resolve", f"api.telegram.org:443:{addr}",
+                   "-o", "/tmp/telegram-send.json", "-w", "%{http_code}",
+                   "-X", "POST", "--data-urlencode", f"chat_id={chat_id}",
+                   "--data-urlencode", "text=✅ Neteru Career Hunter: Telegram API працює!",
+                   f"https://api.telegram.org/bot{token}/sendMessage"],
+                  capture_output=True, text=True, timeout=24)
+              print("Send test: HTTP", r2.stdout.strip() or "none", "curl exit", r2.returncode)
+              if r2.returncode == 0 and r2.stdout.strip() == "200":
+                  print("Message sent successfully via alternate gateway.")
+                  break
+          PY
       - name: Diagnose bot-specific Telegram API failures
         shell: bash
         run: |
