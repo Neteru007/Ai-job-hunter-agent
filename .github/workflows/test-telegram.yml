@@ -14,6 +14,52 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_ALLOWED_USER_ID: ${{ secrets.TELEGRAM_ALLOWED_USER_ID }}
     steps:
+      - name: Diagnose Telegram API connectivity
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import socket
+          import urllib.error
+          import urllib.request
+          token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+          if not token:
+              raise SystemExit("Missing TELEGRAM_BOT_TOKEN")
+          try:
+              addresses = socket.getaddrinfo("api.telegram.org", 443, type=socket.SOCK_STREAM)
+              print("Telegram DNS resolution:", "OK" if addresses else "EMPTY")
+          except Exception as exc:
+              print("Telegram DNS resolution failed:", type(exc).__name__)
+          for family in (socket.AF_INET, socket.AF_INET6):
+              name = "IPv4" if family == socket.AF_INET else "IPv6"
+              try:
+                  addr = socket.getaddrinfo("api.telegram.org", 443, family=family, type=socket.SOCK_STREAM)[0][4]
+                  sock = socket.socket(family, socket.SOCK_STREAM)
+                  sock.settimeout(5)
+                  try:
+                      sock.connect(addr)
+                      print(name, "TCP 443: OK")
+                  finally:
+                      sock.close()
+              except Exception as exc:
+                  print(name, "TCP 443:", type(exc).__name__)
+          req = urllib.request.Request("https://api.telegram.org/bot" + token + "/getMe")
+          try:
+              with urllib.request.urlopen(req, timeout=12) as response:
+                  import json
+                  data = json.load(response)
+                  print("Telegram getMe: OK; username:", data.get("result", {}).get("username", "unknown"))
+          except urllib.error.HTTPError as exc:
+              print("Telegram getMe HTTP status:", exc.code)
+              try:
+                  import json
+                  data = json.loads(exc.read())
+                  print("Telegram error:", data.get("description", "unknown"))
+              except (ValueError, UnicodeDecodeError):
+                  pass
+          except Exception as exc:
+              print("Telegram getMe connection:", type(exc).__name__)
+          PY
       - name: Send test message
         shell: bash
         run: |
