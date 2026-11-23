@@ -1,0 +1,33 @@
+{
+  "name": "YOUR FULL NAME",
+  "email": "YOUR EMAIL",
+  "location": "Kyiv, Ukraine (Remote)",
+  "headline": "Senior ServiceNow Developer | Technical Lead | Architect",
+  "summary": "ServiceNow developer with experience since 2017, specializing in platform development, integrations and service workflows. Seeking senior remote opportunities.",
+  "skills": [
+    "ServiceNow",
+    "JavaScript",
+    "REST APIs",
+    "Service Portal",
+    "ITSM",
+    "CSM",
+    "Python"
+  ],
+  "experience": [
+    {
+      "role": "ServiceNow Developer",
+      "company": "YOUR EMPLOYER",
+      "dates": "ADD DATES",
+      "achievements": [
+        "Describe measurable impact of your integrations and workflows.",
+        "Describe architecture, mentoring or leadership achievements."
+      ]
+    }
+  ],
+  "education": [
+    "ADD EDUCATION"
+  ],
+  "certifications": [
+    "ADD VERIFIED CERTIFICATIONS"
+  ]
+}
