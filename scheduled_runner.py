@@ -37,12 +37,38 @@ def save_state(state):
 
 
 async def api(client, method, payload):
-    resp = await client.post(f"{BASE}/{method}", json=payload)
-    resp.raise_for_status()
-    result = resp.json()
-    if not result.get("ok"):
-        raise RuntimeError(f"Telegram {method} failed: {result.get('description', 'unknown')}")
-    return result["result"]
+    """Retry Telegram rate limits and transient failures without exposing the token."""
+    for attempt in range(6):
+        try:
+            resp = await client.post(f"{BASE}/{method}", json=payload)
+            if resp.status_code == 429:
+                try:
+                    info = resp.json()
+                    wait = int(info.get("parameters", {}).get("retry_after", 0))
+                except (ValueError, TypeError):
+                    wait = 0
+                if not wait:
+                    wait = min(2 ** (attempt + 1), 60)
+                if attempt == 5:
+                    raise RuntimeError(f"Telegram rate limit persisted for {method} after retries")
+                log.warning("Telegram rate limit on %s; waiting %s seconds", method, wait)
+                await asyncio.sleep(min(wait + 1, 120))
+                continue
+            if resp.status_code in (500, 502, 503, 504):
+                if attempt == 5:
+                    raise RuntimeError(f"Telegram temporarily unavailable for {method}")
+                await asyncio.sleep(min(2 ** (attempt + 1), 30))
+                continue
+            resp.raise_for_status()
+            result = resp.json()
+            if not result.get("ok"):
+                raise RuntimeError(f"Telegram {method} failed: {result.get('description', 'unknown')}")
+            return result["result"]
+        except (httpx.TimeoutException, httpx.ConnectError):
+            if attempt == 5:
+                raise
+            await asyncio.sleep(min(2 ** (attempt + 1), 30))
+    raise RuntimeError(f"Telegram request {method} exhausted retries")
 
 
 async def send(client, text, buttons=None):
