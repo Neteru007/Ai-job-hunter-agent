@@ -84,7 +84,7 @@ jobs:
           if own_status == 200 and own_result.get("ok"):
               username = own_result.get("result", {}).get("username", "")
               print("Authenticated bot username:", username)
-              if username.casefold() != "careerhunteraibot":
+              if username.casefold() != "neterucareerhunterbot":
                   raise SystemExit("STOP: GitHub token belongs to a DIFFERENT bot")
               sent_status, _ = check(
                   "OWN sendMessage",
