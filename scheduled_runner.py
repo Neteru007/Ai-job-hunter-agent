@@ -129,6 +129,9 @@ async def run():
         raise SystemExit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USER_ID as Actions secrets.")
     state = read_state()
     async with httpx.AsyncClient(timeout=35) as client:
+        # Send a visible startup confirmation before searching for jobs.
+        # Telegram requires the user to have opened the bot and pressed Start first.
+        await send(client, "🤖 AI Job Hunter запущено! Перевіряю команди та шукаю вакансії ServiceNow. Це тестове повідомлення, а не знайдена вакансія.")
         # Telegram's getUpdates is incompatible with an active webhook.
         webhook = await api(client, "getWebhookInfo", {})
         if webhook.get("url"):
