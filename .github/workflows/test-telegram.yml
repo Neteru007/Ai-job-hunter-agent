@@ -2,6 +2,10 @@ name: Test Telegram Connection
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/test-telegram.yml'
 
 permissions:
   contents: read
@@ -9,95 +13,97 @@ permissions:
 jobs:
   telegram-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_ALLOWED_USER_ID: ${{ secrets.TELEGRAM_ALLOWED_USER_ID }}
     steps:
-      - name: Diagnose Telegram API connectivity
+      - name: Diagnose bot-specific Telegram API failures
         shell: bash
         run: |
           python3 - <<'PY'
-          import os
-          import socket
-          import urllib.error
-          import urllib.request
-          token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-          if not token:
-              raise SystemExit("Missing TELEGRAM_BOT_TOKEN")
-          try:
-              addresses = socket.getaddrinfo("api.telegram.org", 443, type=socket.SOCK_STREAM)
-              print("Telegram DNS resolution:", "OK" if addresses else "EMPTY")
-          except Exception as exc:
-              print("Telegram DNS resolution failed:", type(exc).__name__)
-          for family in (socket.AF_INET, socket.AF_INET6):
-              name = "IPv4" if family == socket.AF_INET else "IPv6"
-              try:
-                  addr = socket.getaddrinfo("api.telegram.org", 443, family=family, type=socket.SOCK_STREAM)[0][4]
-                  sock = socket.socket(family, socket.SOCK_STREAM)
-                  sock.settimeout(5)
-                  try:
-                      sock.connect(addr)
-                      print(name, "TCP 443: OK")
-                  finally:
-                      sock.close()
-              except Exception as exc:
-                  print(name, "TCP 443:", type(exc).__name__)
-          req = urllib.request.Request("https://api.telegram.org/bot" + token + "/getMe")
-          try:
-              with urllib.request.urlopen(req, timeout=12) as response:
-                  import json
-                  data = json.load(response)
-                  print("Telegram getMe: OK; username:", data.get("result", {}).get("username", "unknown"))
-          except urllib.error.HTTPError as exc:
-              print("Telegram getMe HTTP status:", exc.code)
-              try:
-                  import json
-                  data = json.loads(exc.read())
-                  print("Telegram error:", data.get("description", "unknown"))
-              except (ValueError, UnicodeDecodeError):
-                  pass
-          except Exception as exc:
-              print("Telegram getMe connection:", type(exc).__name__)
-          PY
-      - name: Send test message
-        shell: bash
-        run: |
-          python3 - <<'PY'
+          """Isolated connectivity test. Never log the bot token or token-bearing URL."""
           import json
           import os
+          import socket
+          import ssl
+          import time
           import urllib.error
           import urllib.request
 
-          token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-          chat_id = os.environ.get("TELEGRAM_ALLOWED_USER_ID", "")
+          token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+          chat_id = os.getenv("TELEGRAM_ALLOWED_USER_ID", "").strip()
           if not token or not chat_id:
-              raise SystemExit("Missing Telegram secrets")
-          payload = json.dumps({
-              "chat_id": chat_id,
-              "text": "🤖 AI Job Hunter: тестове повідомлення. Зв'язок із Telegram працює!"
-          }).encode()
-          request = urllib.request.Request(
-              "https://api.telegram.org/bot" + token + "/sendMessage",
-              data=payload,
-              headers={"Content-Type": "application/json"},
-              method="POST",
-          )
-          try:
-              with urllib.request.urlopen(request, timeout=15) as response:
-                  result = json.load(response)
-                  print("Telegram sendMessage success:", bool(result.get("ok")))
-          except urllib.error.HTTPError as exc:
-              # Never print the request URL because it contains the bot token.
-              print("Telegram HTTP status:", exc.code)
+              raise SystemExit("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_ALLOWED_USER_ID")
+          bot_id = token.partition(":")[0]
+          if not bot_id.isdigit() or ":" not in token:
+              raise SystemExit("Invalid token format; check GitHub secret")
+
+          # Explicit IPv4 and direct HTTPS avoid broken IPv6 routes and proxy ambiguity.
+          original_getaddrinfo = socket.getaddrinfo
+          def ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
+              return original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+          socket.getaddrinfo = ipv4_only
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+          def check(label, url, timeout=25, payload=None):
+              req = urllib.request.Request(
+                  url,
+                  data=json.dumps(payload).encode() if payload is not None else None,
+                  headers={"Content-Type": "application/json"} if payload is not None else {},
+              )
+              started = time.monotonic()
               try:
-                  error = json.loads(exc.read())
-                  print("Telegram error:", error.get("description", "unknown"))
-                  print("Retry after:", error.get("parameters", {}).get("retry_after", "not specified"))
-              except (ValueError, UnicodeDecodeError):
-                  print("Telegram returned an unreadable error body")
-              raise SystemExit(1)
+                  with opener.open(req, timeout=timeout) as response:
+                      data = json.load(response)
+                      print(label, "HTTP", response.status, "seconds", round(time.monotonic() - started, 1))
+                      return response.status, data
+              except urllib.error.HTTPError as exc:
+                  try:
+                      error = json.loads(exc.read())
+                  except (ValueError, UnicodeDecodeError):
+                      error = {}
+                  print(label, "HTTP", exc.code, "seconds", round(time.monotonic() - started, 1))
+                  print(label, "description", error.get("description", "not returned"))
+                  print(label, "retry_after", error.get("parameters", {}).get("retry_after", "not specified"))
+                  return exc.code, error
+              except Exception as exc:
+                  print(label, "error", type(exc).__name__, "seconds", round(time.monotonic() - started, 1))
+                  return None, {}
+
+          try:
+              with socket.create_connection(("api.telegram.org", 443), timeout=6) as sock:
+                  with ssl.create_default_context().wrap_socket(sock, server_hostname="api.telegram.org") as tls:
+                      print("TLS handshake:", tls.version())
           except Exception as exc:
-              print("Telegram connection error:", type(exc).__name__)
-              raise SystemExit(1)
+              print("TLS handshake:", type(exc).__name__)
+
+          status, _ = check("CONTROL other bot id", "https://api.telegram.org/bot123456:invalid_test/getMe", timeout=12)
+          own_status, own_result = check("OWN getMe", "https://api.telegram.org/bot" + token + "/getMe", timeout=30)
+
+          if own_status == 200 and own_result.get("ok"):
+              username = own_result.get("result", {}).get("username", "")
+              print("Authenticated bot username:", username)
+              if username.casefold() != "careerhunteraibot":
+                  raise SystemExit("STOP: GitHub token belongs to a DIFFERENT bot")
+              sent_status, _ = check(
+                  "OWN sendMessage",
+                  "https://api.telegram.org/bot" + token + "/sendMessage",
+                  timeout=30,
+                  payload={
+                      "chat_id": chat_id,
+                      "text": "✅ CareerHunterAIBot: тест підключення успішний! Бот може надсилати повідомлення.",
+                  },
+              )
+              if sent_status != 200:
+                  raise SystemExit("Bot authenticated, but sendMessage failed; inspect sanitized status")
+              print("PASS: test message sent to allowed chat")
+          else:
+              # Compare same bot ID with a deliberately incorrect secret without printing either.
+              # If both hang or return 502 while a different ID gives 401, this points
+              # to a bot-specific Telegram infrastructure problem, not a wrong token.
+              check("CONTROL own bot id, wrong secret",
+                    "https://api.telegram.org/bot" + bot_id + ":" + ("z" * 40) + "/getMe",
+                    timeout=25)
+              raise SystemExit("Bot API getMe unavailable; see control results above")
           PY
